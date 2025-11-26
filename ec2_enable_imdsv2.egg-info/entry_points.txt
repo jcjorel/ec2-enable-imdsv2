@@ -1,0 +1,2 @@
+[console_scripts]
+ec2-enable-imdsv2 = ec2_enable_imdsv2.cli:main

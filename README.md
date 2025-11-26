@@ -1,0 +1,355 @@
+# EC2 IMDSv2 Enforcement Tool
+
+A Python CLI tool that enables IMDSv2 (Instance Metadata Service Version 2) enforcement on EC2 instances across all enabled AWS regions in your account.
+
+## Overview
+
+This tool helps you secure your AWS EC2 instances by enforcing the use of IMDSv2, which provides additional security through session-oriented requests. The tool will:
+
+1. **Scan** all enabled regions in your AWS account
+2. **Identify** EC2 instances that do not have IMDSv2 enforcement enabled
+3. **Report** findings and ask for confirmation
+4. **Apply** IMDSv2 enforcement (`HttpTokens='required'`) to instances upon your approval
+
+## Why IMDSv2?
+
+IMDSv2 provides enhanced security for accessing instance metadata:
+- **Session-oriented**: Requires token-based authentication
+- **Prevents SSRF attacks**: Mitigates Server-Side Request Forgery vulnerabilities
+- **AWS Best Practice**: Recommended security configuration for all EC2 instances
+
+For more information, see [AWS Documentation on IMDSv2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html).
+
+## Features
+
+- ✅ **Comprehensive Scanning**: Scans all enabled AWS regions automatically
+- ✅ **Safe Two-Phase Approach**: Scan first, then apply changes with confirmation
+- ✅ **Detailed Reporting**: Shows each instance's current status and modification results
+- ✅ **Error Resilience**: Continues processing even if some instances fail
+- ✅ **Clear Output**: Easy-to-read progress and summary reports
+- ✅ **AWS Profile Support**: Works with any configured AWS profile
+
+## Prerequisites
+
+- **Python**: 3.8 or higher
+- **AWS CLI**: Configured with profiles
+- **AWS Credentials**: Valid credentials with required permissions
+- **IAM Permissions**:
+  - `ec2:DescribeRegions`
+  - `ec2:DescribeInstances`
+  - `ec2:ModifyInstanceMetadataOptions`
+
+## Installation
+
+### Option 1: Install from source
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd ec2-enable-imdsv2
+
+# Create and activate virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -e .
+```
+
+### Option 2: Install dependencies only
+
+```bash
+pip install boto3>=1.34.0 botocore>=1.34.0
+```
+
+## Usage
+
+### Basic Command
+
+```bash
+ec2-enable-imdsv2 --profile <your-aws-profile-name>
+```
+
+### Example
+
+```bash
+# Using production AWS profile
+ec2-enable-imdsv2 --profile production
+
+# Using development AWS profile  
+ec2-enable-imdsv2 --profile dev-account
+```
+
+### Help
+
+```bash
+ec2-enable-imdsv2 --help
+```
+
+## How It Works
+
+### Phase 1: Scan
+
+The tool scans all enabled regions and identifies instances:
+
+```
+Scanning AWS Account using profile: production
+Account ID: 123456789012
+================================================================================
+
+Region: us-east-1
+  Found 5 EC2 instances
+  Instance i-1234567890abcdef0 [running]: IMDSv2 NOT enforced (HttpTokens: optional)
+  Instance i-abcdef1234567890a [stopped]: IMDSv2 NOT enforced (HttpTokens: optional)
+  Instance i-fedcba0987654321b [running]: IMDSv2 already enforced ✓
+  ...
+
+Region: us-west-2
+  Found 3 EC2 instances
+  ...
+
+================================================================================
+Scan Summary:
+  Total regions scanned: 16
+  Total instances found: 45
+  Instances requiring IMDSv2 enforcement: 23
+  Instances already compliant: 22
+  Errors encountered: 0
+
+Continue with enabling IMDSv2 enforcement on 23 instance(s)? (yes/no):
+```
+
+### Phase 2: Apply (After Confirmation)
+
+Upon confirmation, the tool applies changes:
+
+```
+Enabling IMDSv2 enforcement...
+================================================================================
+
+Region: us-east-1
+  ✓ Instance i-1234567890abcdef0: IMDSv2 enforcement enabled (state: applied)
+  ✓ Instance i-abcdef1234567890a: IMDSv2 enforcement enabled (state: pending)
+  
+Region: us-west-2
+  ✓ Instance i-9876543210fedcba0: IMDSv2 enforcement enabled (state: applied)
+  ...
+
+================================================================================
+Final Summary:
+  Instances successfully updated: 23
+  Instances failed to update: 0
+  Total time: 45.3 seconds
+
+✓ All instances successfully updated with IMDSv2 enforcement!
+```
+
+## Understanding the Output
+
+### Instance States
+
+- **applied**: Change has been applied immediately (common for stopped instances)
+- **pending**: Change is being applied (common for running instances)
+
+### Status Indicators
+
+- ✓ Success
+- ✗ Error
+- ⚠ Warning
+
+### HttpTokens Values
+
+- **required**: IMDSv2 is enforced (goal state)
+- **optional**: IMDSv2 is available but not required (needs update)
+- **not set**: No explicit setting (treated as optional, needs update)
+
+## Error Handling
+
+The tool is designed to continue processing even when errors occur:
+
+- **Logged Errors**: All errors are logged with instance/region details
+- **Continued Processing**: One failure won't stop processing of other instances
+- **Final Summary**: Detailed error report at the end
+
+Example error output:
+
+```
+Region: us-west-2
+  ✓ Instance i-abc123: IMDSv2 enforcement enabled (state: applied)
+  ✗ Instance i-def456: Failed - InvalidInstanceID.NotFound
+
+================================================================================
+Final Summary:
+  Instances successfully updated: 22
+  Instances failed to update: 1
+  Total time: 45.3 seconds
+
+Detailed error log:
+  - us-west-2/i-def456: InvalidInstanceID.NotFound - The instance may have been terminated
+```
+
+## Security Best Practices
+
+1. **Use IAM Roles**: Prefer IAM roles over access keys when possible
+2. **Least Privilege**: Grant only required permissions
+3. **Audit Changes**: Review the scan results before confirming
+4. **Test First**: Test on a non-production account first
+5. **Backup Configuration**: Document current settings before making changes
+
+## IAM Policy Example
+
+Minimum required permissions:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeRegions",
+        "ec2:DescribeInstances",
+        "ec2:ModifyInstanceMetadataOptions"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+## Troubleshooting
+
+### Profile Not Found
+
+```
+✗ Error: AWS profile 'production' not found
+  Available profiles can be listed with: aws configure list-profiles
+  Configure a new profile with: aws configure --profile production
+```
+
+**Solution**: Configure the AWS profile or use an existing one.
+
+### Missing Permissions
+
+```
+⚠ Warning: Missing ec2:DescribeRegions permission
+  This tool requires the following IAM permissions:
+    - ec2:DescribeRegions
+    - ec2:DescribeInstances
+    - ec2:ModifyInstanceMetadataOptions
+```
+
+**Solution**: Add required permissions to your IAM user/role.
+
+### No Enabled Regions
+
+```
+✗ No enabled regions found. Cannot proceed.
+```
+
+**Solution**: Ensure your AWS account has at least one enabled region.
+
+### Instance Modification Failures
+
+Common reasons for modification failures:
+- **InvalidInstanceID.NotFound**: Instance was terminated
+- **IncorrectInstanceState**: Instance is in a transitional state
+- **UnauthorizedOperation**: Missing required permissions
+
+**Solution**: Review the error message and retry if appropriate.
+
+## Limitations
+
+- **Sequential Processing**: Regions and instances are processed one at a time
+- **No Rollback**: Changes cannot be automatically reverted (manual revert required)
+- **No Filtering**: Processes all instances in all enabled regions
+- **Rate Limiting**: May be slow for accounts with many instances
+
+## Project Structure
+
+```
+ec2-enable-imdsv2/
+├── README.md                      # This file
+├── CLARIFICATION.md              # Requirements clarification
+├── TECHNICAL_PLAN.md             # Technical architecture
+├── IMPLEMENTATION_GUIDE.md       # Detailed implementation guide
+├── requirements.txt              # Python dependencies
+├── setup.py                      # Package configuration
+├── ec2_enable_imdsv2/           # Main package
+│   ├── __init__.py
+│   ├── cli.py                   # CLI entry point
+│   ├── aws_session.py          # AWS session management
+│   ├── region_scanner.py       # Region discovery
+│   ├── instance_scanner.py     # Instance scanning
+│   ├── instance_modifier.py    # Metadata modification
+│   ├── reporter.py             # Output formatting
+│   └── error_handler.py        # Error tracking
+└── tests/                       # Test suite
+    └── ...
+```
+
+## Development
+
+### Running Tests
+
+```bash
+# Install development dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest tests/
+
+# Run with coverage
+pytest --cov=ec2_enable_imdsv2 tests/
+```
+
+### Code Style
+
+The project follows PEP 8 guidelines. Format code with:
+
+```bash
+black ec2_enable_imdsv2/
+flake8 ec2_enable_imdsv2/
+```
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests for new functionality
+5. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Support
+
+For issues and questions:
+- Open an issue on GitHub
+- Check the [AWS IMDSv2 Documentation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html)
+- Review the [TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) for architecture details
+
+## Acknowledgments
+
+- AWS Documentation for IMDSv2 best practices
+- Boto3 team for the AWS SDK for Python
+
+## Changelog
+
+### Version 1.0.0 (Initial Release)
+- Complete scan and modification workflow
+- Support for all enabled AWS regions
+- Interactive confirmation before changes
+- Detailed progress and error reporting
+- Comprehensive error handling
+
+## Related Resources
+
+- [AWS IMDSv2 Documentation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html)
+- [IMDSv2 Transition Guide](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-metadata-transition-to-version-2.html)
+- [Boto3 Documentation](https://boto3.amazonaws.com/v1/documentation/api/latest/index.html)
+- [AWS Security Best Practices](https://aws.amazon.com/security/security-resources/)
