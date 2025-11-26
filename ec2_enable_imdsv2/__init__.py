@@ -13,6 +13,7 @@ from . import (
     region_scanner,
     instance_scanner,
     instance_modifier,
+    account_defaults,
     reporter,
     cli
 )
@@ -23,6 +24,7 @@ __all__ = [
     'region_scanner',
     'instance_scanner',
     'instance_modifier',
+    'account_defaults',
     'reporter',
     'cli',
 ]

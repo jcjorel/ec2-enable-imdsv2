@@ -1,6 +1,7 @@
 README.md
 setup.py
 ec2_enable_imdsv2/__init__.py
+ec2_enable_imdsv2/account_defaults.py
 ec2_enable_imdsv2/aws_session.py
 ec2_enable_imdsv2/cli.py
 ec2_enable_imdsv2/error_handler.py

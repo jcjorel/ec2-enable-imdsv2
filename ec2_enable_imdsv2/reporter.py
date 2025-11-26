@@ -44,8 +44,9 @@ def print_scan_summary(
     total_instances: int,
     needs_update: int,
     already_compliant: int,
-    errors: int
-) -> bool:
+    errors: int,
+    account_defaults_stats: dict = None
+) -> tuple:
     """
     Print scan summary and ask for confirmation
     
@@ -55,9 +56,10 @@ def print_scan_summary(
         needs_update: Number of instances needing IMDSv2 enforcement
         already_compliant: Number of instances already compliant
         errors: Number of errors encountered
+        account_defaults_stats: Optional dict with account defaults statistics
         
     Returns:
-        True if user confirms to proceed, False otherwise
+        Tuple of (proceed_with_instances, proceed_with_account_defaults)
     """
     print(SEPARATOR)
     print("Scan Summary:")
@@ -65,23 +67,56 @@ def print_scan_summary(
     print(f"  Total instances found: {total_instances}")
     print(f"  Instances requiring IMDSv2 enforcement: {needs_update}")
     print(f"  Instances already compliant: {already_compliant}")
+    
+    # Display account defaults status if provided
+    if account_defaults_stats:
+        print()
+        print("Account-Level Defaults (for new instances):")
+        print(f"  Regions with 'required': {account_defaults_stats['required']}")
+        print(f"  Regions with 'optional': {account_defaults_stats['optional']}")
+        print(f"  Regions not set: {account_defaults_stats['not_set']}")
+        print(f"  Regions needing update: {account_defaults_stats['needs_update']}")
+    
     print(f"  Errors encountered: {errors}")
     print()
     
-    if needs_update == 0:
-        print("✓ All instances already have IMDSv2 enforcement enabled!")
-        return False
+    proceed_instances = False
+    proceed_account = False
     
-    # Ask for confirmation
-    while True:
-        response = input(f"Continue with enabling IMDSv2 enforcement on {needs_update} instance(s)? (yes/no): ").strip().lower()
-        if response in ['yes', 'y']:
-            return True
-        elif response in ['no', 'n']:
-            print("Operation cancelled by user")
-            return False
-        else:
-            print("Please answer 'yes' or 'no'")
+    # Ask about instances
+    if needs_update > 0:
+        while True:
+            response = input(f"Enable IMDSv2 enforcement on {needs_update} existing instance(s)? (yes/no): ").strip().lower()
+            if response in ['yes', 'y']:
+                proceed_instances = True
+                break
+            elif response in ['no', 'n']:
+                break
+            else:
+                print("Please answer 'yes' or 'no'")
+    else:
+        print("✓ All instances already have IMDSv2 enforcement enabled!")
+    
+    # Ask about account defaults
+    if account_defaults_stats and account_defaults_stats['needs_update'] > 0:
+        print()
+        while True:
+            response = input(f"Set account-level defaults to 'required' in {account_defaults_stats['needs_update']} region(s)? (yes/no): ").strip().lower()
+            if response in ['yes', 'y']:
+                proceed_account = True
+                break
+            elif response in ['no', 'n']:
+                break
+            else:
+                print("Please answer 'yes' or 'no'")
+    elif account_defaults_stats:
+        print()
+        print("✓ All regions already have account-level defaults set to 'required'!")
+    
+    if not proceed_instances and not proceed_account:
+        print("\nNo changes to apply.")
+    
+    return proceed_instances, proceed_account
 
 
 def print_modification_header() -> None:

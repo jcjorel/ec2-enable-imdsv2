@@ -11,6 +11,7 @@ from . import (
     region_scanner,
     instance_scanner,
     instance_modifier,
+    account_defaults,
     reporter,
     error_handler
 )
@@ -70,16 +71,18 @@ def scan_region_wrapper(session, region: str) -> tuple:
 
 def scan_phase(session, regions: List[str]) -> tuple:
     """
-    Phase 1: Scan all regions and instances in parallel
+    Phase 1: Scan all regions and instances in parallel, and check account defaults
     
     Args:
         session: boto3 Session object
         regions: List of region names to scan
     
     Returns:
-        Tuple of (all_instances, instances_needing_update)
+        Tuple of (all_instances, instances_needing_update, account_defaults_dict)
     """
     print(f"Scanning {len(regions)} regions in parallel...")
+    print("  - Checking instances")
+    print("  - Checking account-level defaults")
     print()
     
     all_instances = []
@@ -108,6 +111,12 @@ def scan_phase(session, regions: List[str]) -> tuple:
                 error_handler.error_tracker.log_error('scan_phase', e, region=region)
                 region_results[region] = []
     
+    # Check account defaults in parallel
+    print()
+    print("Checking account-level defaults...")
+    account_defaults_dict = account_defaults.check_account_defaults_parallel(session, regions)
+    print("  ✓ Account defaults checked")
+    
     print()
     print("Scan Results:")
     print("=" * 80)
@@ -121,7 +130,7 @@ def scan_phase(session, regions: List[str]) -> tuple:
     
     instances_needing_update = instance_scanner.get_instances_needing_update(all_instances)
     
-    return all_instances, instances_needing_update
+    return all_instances, instances_needing_update, account_defaults_dict
 
 
 def modification_phase(session, instances: List) -> List:
@@ -160,6 +169,36 @@ def modification_phase(session, instances: List) -> List:
     return results
 
 
+def apply_account_defaults_phase(session, account_defaults_dict: dict) -> List:
+    """
+    Phase 3: Apply account-level IMDS defaults
+    
+    Args:
+        session: boto3 Session object
+        account_defaults_dict: Dictionary mapping region to current HttpTokens value
+        
+    Returns:
+        List of AccountDefaultResult objects
+    """
+    print()
+    print("Setting Account-Level Defaults...")
+    print("=" * 80)
+    print()
+    print("ℹ This sets defaults for NEW instances only. Existing instances are not affected.")
+    print()
+    
+    # Filter regions that need updating
+    regions_to_update = [
+        region for region, tokens in account_defaults_dict.items()
+        if tokens != 'required'
+    ]
+    
+    # Modify account defaults in parallel
+    results = account_defaults.modify_account_defaults_parallel(session, regions_to_update)
+    
+    return results
+
+
 def main():
     """Main entry point for the CLI"""
     try:
@@ -186,46 +225,82 @@ def main():
             print("\n✗ No enabled regions found. Cannot proceed.")
             sys.exit(1)
         
-        # Phase 1: Scan
+        # Phase 1: Scan (instances and account defaults)
         reporter.print_scan_header(args.profile, account_id)
         
         start_time = time.time()
-        all_instances, instances_needing_update = scan_phase(session, regions)
+        all_instances, instances_needing_update, account_defaults_dict = scan_phase(session, regions)
         
         # Get statistics
         stats = instance_scanner.get_summary_stats(all_instances)
+        account_stats = account_defaults.get_account_defaults_stats(account_defaults_dict)
         
         # Print summary and get confirmation
-        proceed = reporter.print_scan_summary(
+        proceed_instances, proceed_account = reporter.print_scan_summary(
             regions_count=len(regions),
             total_instances=stats['total'],
             needs_update=stats['needs_update'],
             already_compliant=stats['already_compliant'],
-            errors=error_handler.error_tracker.get_error_count()
+            errors=error_handler.error_tracker.get_error_count(),
+            account_defaults_stats=account_stats
         )
         
-        if not proceed:
+        if not proceed_instances and not proceed_account:
             sys.exit(0)
         
-        # Phase 2: Modify
-        results = modification_phase(session, instances_needing_update)
+        instance_results = []
+        account_results = []
+        
+        # Phase 2: Modify instances if requested
+        if proceed_instances:
+            instance_results = modification_phase(session, instances_needing_update)
+        
+        # Phase 3: Apply account defaults if requested
+        if proceed_account:
+            account_results = apply_account_defaults_phase(session, account_defaults_dict)
         
         # Calculate elapsed time
         elapsed_time = time.time() - start_time
         
-        # Get modification summary
-        mod_summary = instance_modifier.get_modification_summary(results)
+        # Print final summary for instances
+        if proceed_instances:
+            mod_summary = instance_modifier.get_modification_summary(instance_results)
+            reporter.print_final_summary(
+                successful=mod_summary['successful'],
+                failed=mod_summary['failed'],
+                elapsed_time=elapsed_time,
+                error_details=mod_summary['error_details']
+            )
         
-        # Print final summary
-        reporter.print_final_summary(
-            successful=mod_summary['successful'],
-            failed=mod_summary['failed'],
-            elapsed_time=elapsed_time,
-            error_details=mod_summary['error_details']
-        )
+        # Print final summary for account defaults
+        if proceed_account:
+            account_summary = account_defaults.get_account_defaults_summary(account_results)
+            print()
+            print("=" * 80)
+            print("Account Defaults Summary:")
+            print(f"  Regions successfully updated: {account_summary['successful']}")
+            print(f"  Regions failed to update: {account_summary['failed']}")
+            
+            if account_summary['error_details']:
+                print()
+                print("Detailed error log:")
+                for error in account_summary['error_details']:
+                    print(f"  - {error}")
+            
+            print()
+            
+            if account_summary['failed'] == 0:
+                print("✓ All regions successfully configured with IMDSv2 account defaults!")
+                print("ℹ New instances will now require IMDSv2 by default.")
+            else:
+                print(f"⚠ Completed with {account_summary['failed']} error(s).")
         
         # Exit with appropriate code
-        sys.exit(0 if mod_summary['failed'] == 0 else 1)
+        any_failures = (
+            (proceed_instances and instance_modifier.get_modification_summary(instance_results)['failed'] > 0) or
+            (proceed_account and account_defaults.get_account_defaults_summary(account_results)['failed'] > 0)
+        )
+        sys.exit(0 if not any_failures else 1)
         
     except KeyboardInterrupt:
         print("\n\nOperation cancelled by user")
