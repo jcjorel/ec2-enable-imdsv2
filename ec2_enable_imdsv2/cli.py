@@ -4,6 +4,7 @@ import argparse
 import sys
 import time
 from typing import List
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import (
     aws_session,
@@ -52,20 +53,71 @@ For more information about IMDSv2, see:
     return parser.parse_args()
 
 
+def scan_region_wrapper(session, region: str) -> tuple:
+    """
+    Wrapper function to scan a single region
+    
+    Args:
+        session: boto3 Session object
+        region: Region name to scan
+        
+    Returns:
+        Tuple of (region, instances_list)
+    """
+    instances = instance_scanner.scan_region(session, region)
+    return region, instances
+
+
 def scan_phase(session, regions: List[str]) -> tuple:
     """
-    Phase 1: Scan all regions and instances
+    Phase 1: Scan all regions and instances in parallel
+    
+    Args:
+        session: boto3 Session object
+        regions: List of region names to scan
     
     Returns:
         Tuple of (all_instances, instances_needing_update)
     """
-    all_instances = []
+    print(f"Scanning {len(regions)} regions in parallel...")
+    print()
     
-    for region in regions:
+    all_instances = []
+    region_results = {}
+    
+    # Scan all regions in parallel using ThreadPoolExecutor
+    max_workers = min(len(regions), 15)  # Limit to 15 concurrent threads
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all region scan tasks
+        future_to_region = {
+            executor.submit(scan_region_wrapper, session, region): region
+            for region in regions
+        }
+        
+        # Collect results as they complete
+        for future in as_completed(future_to_region):
+            region = future_to_region[future]
+            try:
+                region_name, instances = future.result()
+                region_results[region_name] = instances
+                all_instances.extend(instances)
+                # Print progress indicator
+                print(f"  ✓ Scanned {region_name}: {len(instances)} instance(s) found")
+            except Exception as e:
+                error_handler.error_tracker.log_error('scan_phase', e, region=region)
+                region_results[region] = []
+    
+    print()
+    print("Scan Results:")
+    print("=" * 80)
+    print()
+    
+    # Print results in order of regions
+    for region in sorted(region_results.keys()):
+        instances = region_results[region]
         reporter.print_region_header(region)
-        instances = instance_scanner.scan_region(session, region)
         reporter.print_region_scan_results(region, instances)
-        all_instances.extend(instances)
     
     instances_needing_update = instance_scanner.get_instances_needing_update(all_instances)
     
